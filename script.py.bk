@@ -81,6 +81,7 @@ def buscar_dados_e_gerar_relatorio():
 
         concluidas_7d = 0
         concluidas_30d = 0
+        revisoes_pendentes = []
 
         # Estrutura para contagem por curso
         progresso_cursos = {
@@ -90,21 +91,40 @@ def buscar_dados_e_gerar_relatorio():
 
         for aula_id, data_str in rows:
             # 1. Identifica qual curso esta aula pertence pelo ID
+            curso_identificado = False
             for cid, cinfo in MAPA_CURSOS.items():
                 if aula_id.startswith(cinfo["prefixo"]):
                     progresso_cursos[cid]["concluidas"] += 1
+                    curso_identificado = True
                     break
 
-            # 2. Processa a data de conclusão para cálculos de ritmo
+            # 2. Processa a data de conclusão para cálculos de ritmo e revisões
             if data_str:
                 try:
-                    iso_str = data_str.split("|")[0] if "|" in data_str else data_str
+                    prazo_custom_dias = 30
+                    iso_str = data_str
+
+                    if "|" in data_str:
+                        parts = data_str.split("|")
+                        iso_str = parts[0]
+                        if len(parts) > 1 and parts[1].isdigit():
+                            prazo_custom_dias = int(parts[1])
+
                     data_conclusao = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
 
                     if data_conclusao >= limite_7d:
                         concluidas_7d += 1
                     if data_conclusao >= limite_30d:
                         concluidas_30d += 1
+
+                    # Verifica se a revisão está vencida
+                    dias_passados = (agora_utc - data_conclusao).days
+                    if dias_passados > prazo_custom_dias:
+                        revisoes_pendentes.append({
+                            "aula_id": aula_id,
+                            "dias_atraso": dias_passados - prazo_custom_dias,
+                            "data": data_conclusao.strftime("%d/%m/%Y")
+                        })
                 except ValueError:
                     continue
 
@@ -144,7 +164,37 @@ def buscar_dados_e_gerar_relatorio():
             </div>
             """
 
-        # --- MONTAGEM FINAL DO E-MAIL ---
+        # --- ALERTA DE REVISÕES PENDENTES ---
+        html_revisoes = ""
+        if revisoes_pendentes:
+            revisoes_qtd = len(revisoes_pendentes)
+            html_revisoes = f"""
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+                <div style="font-size: 14px; font-weight: bold; color: #991b1b; margin-bottom: 6px;">
+                    ⚠️ Central de Revisões ({revisoes_qtd} aula(s) vencida(s))
+                </div>
+                <p style="font-size: 12px; color: #7f1d1d; margin: 0 0 10px 0;">
+                    Aulas concluídas há mais de 30 dias que precisam de revisão rápida antes de entrevistas técnicas:
+                </p>
+                <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #991b1b;">
+            """
+            for rev in revisoes_pendentes[:6]: # Mostra as 6 mais urgentes
+                html_revisoes += f"<li><b>Aula {rev['aula_id']}</b> (Atrasada há {rev['dias_atraso']} dias • Concluída em {rev['data']})</li>"
+            
+            if len(revisoes_pendentes) > 6:
+                html_revisoes += f"<li>... e mais {len(revisoes_pendentes) - 6} aula(s). Acesse o painel web para ver todas.</li>"
+
+            html_revisoes += "</ul></div>"
+        else:
+            html_revisoes = """
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #22c55e; border-radius: 8px; padding: 14px 18px; margin-bottom: 24px;">
+                <span style="font-size: 13px; font-weight: bold; color: #166534;">
+                    ✅ Todas as revisões técnicas estão em dia!
+                </span>
+            </div>
+            """
+
+# --- MONTAGEM FINAL DO E-MAIL ---
         data_formatada = datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y às %H:%M")
         assunto = f"📊 [Progresso do GABRIEL] Relatório Diário - {percentual_geral}% Concluído ({total_concluidas}/{TOTAL_AULAS_GERAL})"
 
@@ -209,6 +259,9 @@ def buscar_dados_e_gerar_relatorio():
                             </tr>
                         </table>
                     </div>
+
+                    <!-- Revisões Pendentes -->
+                    {html_revisoes}
 
                     <!-- Detalhamento por Curso -->
                     <div style="margin-bottom: 24px;">
@@ -288,8 +341,8 @@ if __name__ == "__main__":
         CronTrigger(hour=12, minute=0, timezone="America/Sao_Paulo")
     )
 
-    # Execução imediata ao iniciar para testes:
-    enviar_email()
+    # Se desejar testar um envio imediato ao iniciar o script, remova o '#' abaixo:
+    # enviar_email()
 
     try:
         scheduler.start()
